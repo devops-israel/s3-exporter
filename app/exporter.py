@@ -27,6 +27,7 @@ from prometheus_client.core import GaugeMetricFamily, REGISTRY
 import argparse
 import yaml
 import logging
+import os
 from S3.Config import Config as S3Config
 from S3.S3 import S3
 
@@ -43,10 +44,10 @@ class S3Collector(object):
     def __init__(self, config):
         self._config = config
         self._s3config = S3Config()
-        access_key = config.get('access_key', False)
+        access_key = os.getenv('AWS_ACCESS_KEY_ID', False)
         if access_key:
             self._s3config.update_option('access_key', access_key)
-        secret_key = config.get('secret_key', False)
+        secret_key = os.getenv('AWS_SECRET_ACCESS_KEY', False)
         if secret_key:
             self._s3config.update_option('secret_key', secret_key)
         host_base = config.get('host_base', False)
@@ -60,10 +61,16 @@ class S3Collector(object):
         signature = config.get('signature_v2', True)
         self._s3config.update_option('signature_v2', signature)
         self._s3 = S3(self._s3config)
-        
+
     def collect(self):
         pattern = self._config.get('pattern', False)
-            
+
+        file_timestamp_gauge = GaugeMetricFamily(
+                's3_file_timestamp',
+                'timestamp(milliseconds) for file in '
+                'folder',
+                labels=['folder', 'file'],
+        )
         latest_file_timestamp_gauge = GaugeMetricFamily(
                 's3_latest_file_timestamp',
                 'Last modified timestamp(milliseconds) for latest file in '
@@ -100,16 +107,23 @@ class S3Collector(object):
             files = sorted(files, key=lambda s: s['LastModified'])
             if not files:
                 continue
+
+            for s3_file in files:
+                file_timestamp_gauge.add_metric([
+                    folder,
+                    s3_file['Key'],
+                ], string_to_timestamp(s3_file['LastModified']))
+
             last_file = files[-1]
             last_file_name = last_file['Key']
             oldest_file = files[0]
             oldest_file_name = oldest_file['Key']
-    
+
             latest_modified = string_to_timestamp(last_file['LastModified'])
             oldest_modified = string_to_timestamp(oldest_file['LastModified'])
 
             file_count_gauge.add_metric([folder], len(files))
-            
+
             latest_file_timestamp_gauge.add_metric([
                 folder,
                 last_file_name,
@@ -126,7 +140,8 @@ class S3Collector(object):
                 folder,
                 oldest_file_name,
             ], int(oldest_file['Size']))
-            
+
+        yield file_timestamp_gauge
         yield latest_file_timestamp_gauge
         yield oldest_file_timestamp_gauge
         yield latest_file_size_gauge
